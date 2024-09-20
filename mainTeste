@@ -1,0 +1,321 @@
+import os
+import time
+import sys
+import subprocess
+import winreg
+import warnings 
+import logging 
+import shutil
+from OpenSSL import crypto
+from datetime import datetime
+import signal
+
+# Configurações de logging
+logging.basicConfig(level=logging.INFO,
+                    filename='logDeErros.log', 
+                    format="%(asctime)s - %(levelname)s - %(message)s")
+
+# Caminhos das pastas
+path = r'C:\Users\victor.gomes\Fiscoplan Dropbox\AUDITOR\apiauditorteste.grupofiscoplan.com.br\CapturadorESocial\ArquivosTxtGerados\\'
+newPath = r'C:\Users\victor.gomes\Fiscoplan Dropbox\AUDITOR\apiauditorteste.grupofiscoplan.com.br\CapturadorESocial\SolicitacoesFeitas\\'
+
+# Ignorar warnings específicos
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=SyntaxWarning)
+
+def time_range(star_timestr, end_timestr):
+    now = datetime.now().time()
+
+    # Converter strings para objetos time
+    star_time = datetime.strptime(star_timestr, "%H:%M").time()
+    end_time = datetime.strptime(end_timestr, "%H:%M").time()
+
+    return star_time <= now <= end_time
+
+def is_directory_empty(Path):
+    return not os.listdir(Path) if os.path.isdir(Path) else False
+
+def GetCertificate(pathOfCertificate, passwordOfCertifcate):
+    """Carrega e retorna o certificado a partir do arquivo PKCS#12."""
+    pkcs12 = crypto.load_pkcs12(open(pathOfCertificate, 'rb').read(), passwordOfCertifcate)   
+    return pkcs12.get_certificate()
+
+def UpdateStringValue(stringValueName, newValueOfStringValue, stringValuePath):
+    """Atualiza o valor de uma string no registro do Windows."""
+    key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, stringValuePath, 0, winreg.KEY_ALL_ACCESS)
+    winreg.SetValueEx(key, stringValueName, 0, winreg.REG_SZ, newValueOfStringValue)
+    winreg.CloseKey(key)
+  
+def clearCertificate(stringValueName, newValueOfStringValue, stringValuePath):
+    """Limpa a configuração do certificado automático da máquina."""
+    key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, stringValuePath, 0, winreg.KEY_ALL_ACCESS)
+    winreg.SetValueEx(key, stringValueName, 0, winreg.REG_SZ, newValueOfStringValue)
+    winreg.CloseKey(key)
+
+def processCertificate(cnpjCert, password):
+    """Processa o certificado e atualiza as configurações do Chrome."""
+    pathOfStringValue = r'SOFTWARE\Policies\Google\Chrome\AutoSelectCertificateForUrls'
+    stringValueName = '1' 
+    path = r'C:\Users\victor.gomes\Fiscoplan Dropbox\Paula  Oliveira\pedro\certificate'
+    nameFile = os.path.join(path, f'{cnpjCert}.pfx')
+    
+    # Carrega o certificado
+    certificate = GetCertificate(nameFile, password)
+    subject = certificate.get_subject()
+    issuer = certificate.get_issuer()
+
+    # Monta o JSON para configuração do certificado
+    url_where_certificate_will_be_send = "https://certificado.sso.acesso.gov.br/"
+    json = f'{{"pattern":"{url_where_certificate_will_be_send}","filter":{{"ISSUER":{{"CN":"{issuer.CN}","C":"{issuer.C}","O":"{issuer.O}"}},"SUBJECT":{{"CN":"{subject.CN}","C":"{subject.C}","O":"{subject.O}"}}}}}}'
+    
+    UpdateStringValue(stringValueName, json, pathOfStringValue)
+    return stringValueName, pathOfStringValue
+
+def deleteCertConfig():
+    """Remove a configuração do certificado do registro do Windows."""
+    jsonDel = '{"pattern":"url_where_certificate_will_be_send","filter":{"ISSUER":{"CN":"subject.CN","C":"subject.CN","O":"subject.CN"},"SUBJECT":{"CN":"subject.CN","C":"subject.CN","O":"subject.CN"}}}'
+    pathOfStringValue = r'SOFTWARE\Policies\Google\Chrome\AutoSelectCertificateForUrls'
+    stringValueName = '1' 
+    clearCertificate(stringValueName, jsonDel, pathOfStringValue)
+
+def cnpjProcessed(pathArchives):
+    """Processa arquivos .txt e extrai valores de CNPJ e certificado."""
+    values = {
+        'CnpjEmpresa': '',
+        'SenhaCertificado': '',
+        'CnpjCertificado': '',
+        'AmbienteGeracao': '',
+    }
+    
+    for file in pathArchives:
+        pathArchive = os.path.join(path, file)
+
+        if os.path.exists(pathArchive):
+            with open(pathArchive, 'r', encoding='utf-8-sig', errors='ignore') as archive:
+                lines = archive.readlines()
+
+                for line in lines:
+                    parts = line.split(': ', 1)
+                    if len(parts) == 2:
+                        key = parts[0].strip()
+                        value = parts[1].strip()
+
+                        if key in values:
+                            values[key] = value
+
+    return values
+
+def removeFile(cnpj):
+    """Remove arquivos .txt com base no CNPJ da pasta de origem."""
+    for file in os.listdir(path):
+        exec_dir = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(exec_dir, 'Cnpj.txt'), 'r') as archiveinfo:
+            cnpj = archiveinfo.readline().strip()
+        if file == f"{cnpj}.txt":
+            os.remove(os.path.join(path, file))
+
+def main():
+    """Função principal que processa arquivos e executa subprocessos baseados no conteúdo dos arquivos."""
+    
+    Cnpj = None
+    procuracao = None
+
+    def sendValue():
+        nonlocal Cnpj
+        nonlocal procuracao
+
+        execDir = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(os.path.abspath(__file__))
+
+        while True:
+            # Definindo um stop para o código
+            start_timestr = "19:59"
+            end_timestr = "23:59"
+            
+            if time_range(start_timestr, end_timestr):
+                print(f"""Estamos dentro do horário de execução do programa
+                      {datetime.now()}
+                      """)
+            else:
+                print(f"""Fim do horário de execução do programa....
+                      {datetime.now()}""")
+                break
+
+            # Lista arquivos .txt nas pastas de origem e destino
+            path_files = [f for f in os.listdir(path) if f.endswith(".txt")]
+            newPath_files = [f for f in os.listdir(newPath) if f.endswith(".txt")]
+
+            # Processa arquivos da pasta de origem
+            if path_files:
+
+                for file_name in path_files:
+                    
+                    file_path = os.path.join(path, file_name)
+
+                    # Tentando abrir o arquivo
+                    try:
+                        with open(file_path, 'r') as file:
+                            lines = file.readlines()
+
+                            Cnpj = lines[0][15:35].strip()
+                            password = lines[5][18:40].strip()
+                            cnpjCert = lines[6][17:45].strip()
+                            AmbienteGeracao = lines[7][17:70].strip()
+                            
+                        procuracao = 'Terceiros'
+                        
+                        # Processa o certificado
+                        processCertificate(cnpjCert, password)
+                        
+                        # Atualiza o valor de procuracao
+                        if cnpjCert == Cnpj:
+                            procuracao = 'Própria'
+
+                        # Salva CNPJ e procuracao em arquivos
+                        with open(os.path.join(execDir, 'Cnpj.txt'), 'w') as archiveInfo:
+                            archiveInfo.write(Cnpj)
+                        with open(os.path.join(execDir, 'Procuracao.txt'), 'w') as archiveInfo:
+                            archiveInfo.write(procuracao)
+
+                        # Executa o script de solicitação
+                        script = os.path.join(execDir, 'solicitacaoesocial.py')
+                        result = subprocess.run([sys.executable, script])
+
+                        # Manipula o retorno do subprocesso
+                        if result.returncode == 0:
+                            logging.info(f"O script {script} executou com sucesso. Empresa em execução: {Cnpj}")
+
+                        elif result.returncode == 2:
+                            logging.info(f'Fim das solicitações. Empresa: {Cnpj}')
+                            fileOldPath = os.path.join(path, f'{Cnpj}.txt')
+                            fileNewPath = os.path.join(newPath, f'{Cnpj}.txt')
+                            shutil.move(fileOldPath, fileNewPath)
+                            print('Arquivo movido para a pasta de downloads')
+
+                        elif result.returncode == 3:
+                            logging.info(f'O usuário encerrou a execução do programa. Empresa: {Cnpj}')
+                            deleteCertConfig()
+
+                        elif result.returncode == 8:
+                            print('Ocorreu um erro durante a solicitação, tentando novamente...')
+                            attempts = 0
+                            max_attempts = 5
+                            while attempts < max_attempts:
+                                try:
+                                    print(f'Tentativa {attempts + 1} de {max_attempts}: Executando a solicitação novamente')
+                                    result = subprocess.run([sys.executable, script], check=True)
+                                    print('Solicitação completa')
+                                    break
+                                except subprocess.CalledProcessError as e:
+                                    print(f'Erro ao realizar a solicitação, tentando novamente... erro: {e}')
+                                    attempts += 1
+                                    time.sleep(10)
+
+                            if attempts == max_attempts:
+                                print('Número máximo de tentativas atingido. Não foi possível completar a solicitação.')
+                        
+                    except Exception as e:
+                        print(f"Não foi possível abrir o arquivo, {e}")
+                        continue
+
+            # Processa arquivos da pasta de destino
+            if newPath_files:
+                
+                for file_name in newPath_files:
+                    
+                    file_path = os.path.join(newPath, file_name)
+
+                    # Tentando abrir o arquivo
+                    try:
+                        with open(file_path, 'r') as file:
+                            lines = file.readlines()
+
+                            Cnpj = lines[0][15:35].strip()
+                            password = lines[5][18:40].strip()
+                            cnpjCert = lines[6][17:45].strip()
+                            AmbienteGeracao = lines[7][17:70].strip()
+                        
+                        procuracao = 'Terceiros'
+                    
+                        # Processa o certificado
+                        processCertificate(cnpjCert, password)
+                        print(f"Cheguei aqui")
+                        
+                        # Atualiza o valor de procuracao
+                        if cnpjCert == Cnpj:
+                            procuracao = 'Própria'
+
+                        # Salva CNPJ e procuracao em arquivos
+                        with open(os.path.join(execDir, 'Cnpj.txt'), 'w') as archiveInfo:
+                            archiveInfo.write(Cnpj)
+                        with open(os.path.join(execDir, 'Procuracao.txt'), 'w') as archiveInfo:
+                            archiveInfo.write(procuracao)
+
+                        # Executa o script de download
+                        script = os.path.join(execDir, 'downloadesocial.py')
+                        result = subprocess.run([sys.executable, script])
+                        print(f"Retorno do subprocess: {result.returncode}")
+
+                        # Manipula o retorno do subprocesso
+                        if result.returncode == 6:
+                            logging.info('O download só poderá ser realizado após as 20:00')
+
+                        elif result.returncode == 7:
+                            print('Ocorreu um erro durante os downloads, tentando novamente...')
+                            attempts = 0
+                            max_attempts = 5
+                            while attempts < max_attempts:
+                                try:
+                                    print(f'Tentativa {attempts + 1} de {max_attempts}: Executando os downloads novamente')
+                                    result = subprocess.run([sys.executable, script], check=True)
+                                    print('Downloads completos')
+                                    break
+                                except subprocess.CalledProcessError as e:
+                                    print(f'Erro ao realizar os downloads, tentando novamente... erro: {e}')
+                                    attempts += 1
+                                    time.sleep(10)
+
+                            if attempts == max_attempts:
+                                print('Número máximo de tentativas atingido. Não foi possível completar os downloads.')
+
+                        elif result.returncode == 10:
+                            print(f'Arquivos não disponíveis para download. Empresa: {cnpjCert}')
+
+                        elif result.returncode == 11:
+                            file_to_remove = os.path.join(newPath, f'{cnpjCert}.txt')
+                            if os.path.exists(file_to_remove):
+                                os.remove(file_to_remove)
+                                print(f'Arquivo {file_to_remove} removido da pasta newPath.')
+                            else:
+                                print(f'Arquivo {file_to_remove} não encontrado na pasta newPath.')
+
+                        elif result.returncode in [12, 13]:
+                            print('Captcha encontrado ao realizar o processo de solicitação, aguardando...')
+                            attempts = 0
+                            max_attempts = 5
+                            while attempts < max_attempts:
+                                try:
+                                    print(f'Tentativa {attempts + 1} de {max_attempts}: Executando as solicitações novamente em 5 minutos')
+                                    result = subprocess.run([sys.executable, script], check=True)
+                                    print('Solicitações realizadas')
+                                    break
+                                except subprocess.CalledProcessError as e:
+                                    print(f'Erro ao realizar os downloads, tentando novamente... erro: {e}')
+                                    attempts += 1
+                                    time.sleep(250)
+
+                            if attempts == max_attempts:
+                                print(f'Número máximo de tentativas atingido. Não foi possível completar as solicitações por conta do captcha')
+
+                    except Exception as e:
+                        print(f"Não foi possícel abrir o arquivo, {e}")
+                        continue
+            if is_directory_empty(newPath) and is_directory_empty(path):
+                print('Aguardando novos arquivos na pasta path...')
+                time.sleep(30)
+        
+
+
+    sendValue()
+
+if __name__ == "__main__":
+    main()
