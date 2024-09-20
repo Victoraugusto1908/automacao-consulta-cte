@@ -1,0 +1,21 @@
+import schedule
+import subprocess
+import sys
+from datetime import datetime
+import time
+
+result = None
+
+# Função para rodar o script main
+def job_esocial():
+    global result
+    now = datetime.now().strftime('%H:%M:%S')
+    print(f"Comecei a rodar o código main às {now}")
+    result = subprocess.Popen([sys.executable, 'mainTeste.py'])
+
+# Agenda a tarefa para rodar todo dia a determninada hora
+schedule.every().day.at("20:00").do(job_esocial)
+
+while True:
+    schedule.run_pending() # Executa tarefas agendadas
+    time.sleep(1)
